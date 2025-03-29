@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify
 import cv2
 import numpy as np
@@ -26,11 +27,8 @@ def upload_reference():
     data = request.get_json()
     base64_img = data.get('image')
     image = base64_to_image(base64_img)
-
-    image = cv2.resize(image, (640, 480)) 
-
+    image = cv2.resize(image, (640, 480))
     keypoints, descriptors = orb.detectAndCompute(image, None)
-    print(f"[REF] Keypoints: {len(keypoints)}, Descriptors: {descriptors.shape if descriptors is not None else None}")
 
     if descriptors is None:
         return jsonify({'error': 'No features found in reference image'}), 400
@@ -53,8 +51,6 @@ def analyze():
         image = cv2.resize(image, (640, 480))
 
         kp2, des2 = orb.detectAndCompute(image, None)
-        print(f"[FRAME] Keypoints: {len(kp2)}, Descriptors: {des2.shape if des2 is not None else None}")
-
         if des2 is None:
             return jsonify({'match': False, 'reason': 'No features in camera image'})
 
@@ -70,23 +66,22 @@ def analyze():
         threshold = median_distance * 1.2
         good_matches = [m for m in matches if m.distance < threshold]
 
-        print(f"[MATCHING] Good matches: {len(good_matches)}, Median dist: {median_distance:.2f}, Threshold: {threshold:.2f}")
-
         if len(good_matches) < 20:
             return jsonify({'match': False, 'reason': 'Not enough good matches', 'good_matches': len(good_matches)})
 
         src_pts = np.float32([reference_keypoints[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
         dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0, maxIters=3000, confidence=0.995)
         inliers = int(mask.sum()) if mask is not None else 0
-
-        print(f"[HOMOGRAPHY] Inliers: {inliers} / {len(good_matches)}")
 
         is_match = inliers >= 10 and (inliers / len(good_matches)) >= 0.3
 
         match_visual_base64 = None
-        if mask is not None:
+        box_points = None
+
+        if is_match and mask is not None:
+            # good matches
             match_img = cv2.drawMatches(
                 reference_image, reference_keypoints,
                 image, kp2,
@@ -96,6 +91,12 @@ def analyze():
             )
             match_visual_base64 = image_to_base64(match_img)
 
+            # frame
+            h, w = reference_image.shape[:2]
+            pts = np.float32([[0,0], [0,h-1], [w-1,h-1], [w-1,0]]).reshape(-1,1,2)
+            dst = cv2.perspectiveTransform(pts, M)
+            box_points = dst.reshape(-1, 2).tolist()
+
         return jsonify({
             'match': is_match,
             'good_matches': len(good_matches),
@@ -103,11 +104,11 @@ def analyze():
             'inliers': inliers,
             'threshold': threshold,
             'median_distance': median_distance,
-            'match_visual': match_visual_base64
+            'match_visual': match_visual_base64,
+            'box': box_points
         })
 
     except Exception as e:
-        print(f"[ERROR] {e}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
