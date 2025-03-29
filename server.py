@@ -53,16 +53,30 @@ def analyze():
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(reference_descriptors, des2)
+    print(f"[MATCHING] Total raw matches: {len(matches)}")
 
-    # Відфільтрувати за відстанню
-    good_matches = [m for m in matches if m.distance < 70] 
-    print(f"[MATCHING] Good matches: {len(good_matches)}, Total: {len(matches)}")
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    distances = [m.distance for m in matches]
+    if len(distances) == 0:
+        return jsonify({'match': False, 'reason': 'No matches found'})
+
+    median_distance = np.median(distances)
+    dynamic_threshold = median_distance * 1.2
+
+    good_matches = [m for m in matches if m.distance < dynamic_threshold]
+    print(f"[MATCHING] Good matches: {len(good_matches)}, Median dist: {median_distance:.2f}, Threshold: {dynamic_threshold:.2f}")
+
+    is_match = len(good_matches) >= 15
 
     return jsonify({
-        'match': len(good_matches) > 5,  # 🔽 з 15 до 5
+        'match': is_match,
         'good_matches': len(good_matches),
-        'total_matches': len(matches)
+        'total_matches': len(matches),
+        'threshold': dynamic_threshold,
+        'median_distance': median_distance
     })
+
 
 
 if __name__ == '__main__':
