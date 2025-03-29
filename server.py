@@ -1,25 +1,27 @@
-# server.py — ORB з логами та зниженим порогом
-from flask import Flask, request, jsonify
 import cv2
 import numpy as np
 import base64
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-
 reference_descriptors = None
 reference_keypoints = None
+reference_image = None
 orb = cv2.ORB_create(nfeatures=1000)
-
 
 def base64_to_image(base64_str):
     img_data = base64.b64decode(base64_str)
     np_arr = np.frombuffer(img_data, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
+def image_to_base64(img):
+    _, buffer = cv2.imencode('.jpg', img)
+    return base64.b64encode(buffer).decode('utf-8')
+
 
 @app.route('/upload_reference', methods=['POST'])
 def upload_reference():
-    global reference_descriptors, reference_keypoints
+    global reference_descriptors, reference_keypoints, reference_image
     data = request.get_json()
     base64_img = data.get('image')
     image = base64_to_image(base64_img)
@@ -30,6 +32,7 @@ def upload_reference():
     if descriptors is None:
         return jsonify({'error': 'No features found in reference image'}), 400
 
+    reference_image = image
     reference_descriptors = descriptors
     reference_keypoints = keypoints
     return jsonify({'status': 'Reference descriptors stored'})
@@ -37,7 +40,7 @@ def upload_reference():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    global reference_descriptors, reference_keypoints
+    global reference_descriptors, reference_keypoints, reference_image
     if reference_descriptors is None:
         return jsonify({'error': 'No reference uploaded'}), 400
 
@@ -66,33 +69,39 @@ def analyze():
 
         print(f"[MATCHING] Good matches: {len(good_matches)}, Median dist: {median_distance:.2f}, Threshold: {threshold:.2f}")
 
-        if len(good_matches) < 25:
-            return jsonify({'match': False, 'reason': 'Not enough good matches', 'good_matches': len(good_matches)})
+        # Перевірка гомографії
+        inliers = 0
+        match_visual_base64 = None
 
-        # Готуємо дані для пошуку гомографії
-        src_pts = np.float32([reference_keypoints[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        if len(good_matches) >= 15:
+            src_pts = np.float32([reference_keypoints[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-        inliers = int(mask.sum()) if mask is not None else 0
+            M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+            if mask is not None:
+                inliers = int(mask.sum())
+                print(f"[HOMOGRAPHY] Inliers: {inliers} / {len(good_matches)}")
 
-        print(f"[HOMOGRAPHY] Inliers: {inliers} / {len(good_matches)}")
-
-        is_match = inliers > 15  # Мінімум реальних геометричних збігів
+                # Візуалізація good matches
+                match_visual = cv2.drawMatches(
+                    reference_image, reference_keypoints,
+                    image, kp2,
+                    good_matches, None,
+                    matchesMask=mask.ravel().tolist(),
+                    flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+                )
+                match_visual_base64 = image_to_base64(match_visual)
 
         return jsonify({
-            'match': is_match,
+            'match': inliers > 15,
             'good_matches': len(good_matches),
             'total_matches': len(matches),
             'inliers': inliers,
             'threshold': threshold,
-            'median_distance': median_distance
+            'median_distance': median_distance,
+            'match_visual': match_visual_base64  # base64 зображення з лініями
         })
 
     except Exception as e:
         print(f"[ERROR] {e}")
         return jsonify({'error': str(e)}), 500
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
