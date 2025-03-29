@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify
 import cv2
 import numpy as np
@@ -16,10 +15,6 @@ def base64_to_image(base64_str):
     img_data = base64.b64decode(base64_str)
     np_arr = np.frombuffer(img_data, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-def image_to_base64(img):
-    _, buffer = cv2.imencode('.jpg', img)
-    return base64.b64encode(buffer).decode('utf-8')
 
 @app.route('/upload_reference', methods=['POST'])
 def upload_reference():
@@ -77,21 +72,8 @@ def analyze():
 
         is_match = inliers >= 10 and (inliers / len(good_matches)) >= 0.3
 
-        match_visual_base64 = None
         box_points = None
-
         if is_match and mask is not None:
-            # good matches
-            match_img = cv2.drawMatches(
-                reference_image, reference_keypoints,
-                image, kp2,
-                good_matches, None,
-                matchesMask=mask.ravel().tolist(),
-                flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
-            )
-            match_visual_base64 = image_to_base64(match_img)
-
-            # frame
             h, w = reference_image.shape[:2]
             pts = np.float32([[0,0], [0,h-1], [w-1,h-1], [w-1,0]]).reshape(-1,1,2)
             dst = cv2.perspectiveTransform(pts, M)
@@ -104,7 +86,6 @@ def analyze():
             'inliers': inliers,
             'threshold': threshold,
             'median_distance': median_distance,
-            'match_visual': match_visual_base64,
             'box': box_points
         })
 
