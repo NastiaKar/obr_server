@@ -1,4 +1,4 @@
-# server.py — оновлений для ORB
+# server.py — ORB з логами та зниженим порогом
 from flask import Flask, request, jsonify
 import cv2
 import numpy as np
@@ -25,6 +25,8 @@ def upload_reference():
     image = base64_to_image(base64_img)
     keypoints, descriptors = orb.detectAndCompute(image, None)
 
+    print(f"[REF] Keypoints: {len(keypoints)}, Descriptors: {descriptors.shape if descriptors is not None else None}")
+
     if descriptors is None:
         return jsonify({'error': 'No features found in reference image'}), 400
 
@@ -44,6 +46,7 @@ def analyze():
     image = base64_to_image(base64_img)
 
     kp2, des2 = orb.detectAndCompute(image, None)
+    print(f"[FRAME] Keypoints: {len(kp2)}, Descriptors: {des2.shape if des2 is not None else None}")
 
     if des2 is None:
         return jsonify({'match': False, 'reason': 'No features in camera image'})
@@ -52,10 +55,11 @@ def analyze():
     matches = bf.match(reference_descriptors, des2)
 
     # Відфільтрувати за відстанню
-    good_matches = [m for m in matches if m.distance < 50]
+    good_matches = [m for m in matches if m.distance < 70] 
+    print(f"[MATCHING] Good matches: {len(good_matches)}, Total: {len(matches)}")
 
     return jsonify({
-        'match': len(good_matches) > 15,
+        'match': len(good_matches) > 5,  # 🔽 з 15 до 5
         'good_matches': len(good_matches),
         'total_matches': len(matches)
     })
