@@ -83,7 +83,7 @@ def analyze():
 
         print(f"[HOMOGRAPHY] Inliers: {inliers} / {len(good_matches)}")
 
-        is_match = inliers > 15 and (inliers / len(good_matches)) > 0.5
+        is_match = inliers >= 10 and (inliers / len(good_matches)) >= 0.3
 
         match_visual_base64 = None
         if mask is not None:
