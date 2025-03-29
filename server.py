@@ -1,4 +1,4 @@
-# opencv_server/server.py
+# server.py — оновлений для ORB
 from flask import Flask, request, jsonify
 import cv2
 import numpy as np
@@ -6,8 +6,9 @@ import base64
 
 app = Flask(__name__)
 
-# Загружене зображення з Sender (тимчасово зберігаємо тут)
-reference_image = None
+reference_descriptors = None
+reference_keypoints = None
+orb = cv2.ORB_create(nfeatures=1000)
 
 
 def base64_to_image(base64_str):
@@ -18,44 +19,47 @@ def base64_to_image(base64_str):
 
 @app.route('/upload_reference', methods=['POST'])
 def upload_reference():
-    global reference_image
+    global reference_descriptors, reference_keypoints
     data = request.get_json()
     base64_img = data.get('image')
-    reference_image = base64_to_image(base64_img)
-    return jsonify({'status': 'Reference image uploaded'})
+    image = base64_to_image(base64_img)
+    keypoints, descriptors = orb.detectAndCompute(image, None)
+
+    if descriptors is None:
+        return jsonify({'error': 'No features found in reference image'}), 400
+
+    reference_descriptors = descriptors
+    reference_keypoints = keypoints
+    return jsonify({'status': 'Reference descriptors stored'})
 
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    global reference_image
-    if reference_image is None:
-        return jsonify({'error': 'No reference image uploaded'}), 400
+    global reference_descriptors, reference_keypoints
+    if reference_descriptors is None:
+        return jsonify({'error': 'No reference uploaded'}), 400
 
     data = request.get_json()
     base64_img = data.get('image')
-    frame = base64_to_image(base64_img)
+    image = base64_to_image(base64_img)
 
-    try:
-        sift = cv2.SIFT_create()
-        kp1, des1 = sift.detectAndCompute(reference_image, None)
-        kp2, des2 = sift.detectAndCompute(frame, None)
+    kp2, des2 = orb.detectAndCompute(image, None)
 
-        if des1 is None or des2 is None:
-            return jsonify({'match': False, 'reason': 'No descriptors found'})
+    if des2 is None:
+        return jsonify({'match': False, 'reason': 'No features in camera image'})
 
-        bf = cv2.BFMatcher()
-        matches = bf.knnMatch(des1, des2, k=2)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(reference_descriptors, des2)
 
-        good = []
-        for m, n in matches:
-            if m.distance < 0.75 * n.distance:
-                good.append(m)
+    # Відфільтрувати за відстанню
+    good_matches = [m for m in matches if m.distance < 50]
 
-        return jsonify({'match': len(good) > 10, 'matches': len(good)})
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    return jsonify({
+        'match': len(good_matches) > 15,
+        'good_matches': len(good_matches),
+        'total_matches': len(matches)
+    })
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=10000)
