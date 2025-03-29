@@ -41,42 +41,57 @@ def analyze():
     if reference_descriptors is None:
         return jsonify({'error': 'No reference uploaded'}), 400
 
-    data = request.get_json()
-    base64_img = data.get('image')
-    image = base64_to_image(base64_img)
+    try:
+        data = request.get_json()
+        base64_img = data.get('image')
+        image = base64_to_image(base64_img)
 
-    kp2, des2 = orb.detectAndCompute(image, None)
-    print(f"[FRAME] Keypoints: {len(kp2)}, Descriptors: {des2.shape if des2 is not None else None}")
+        kp2, des2 = orb.detectAndCompute(image, None)
+        print(f"[FRAME] Keypoints: {len(kp2)}, Descriptors: {des2.shape if des2 is not None else None}")
 
-    if des2 is None:
-        return jsonify({'match': False, 'reason': 'No features in camera image'})
+        if des2 is None:
+            return jsonify({'match': False, 'reason': 'No features in camera image'})
 
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(reference_descriptors, des2)
-    print(f"[MATCHING] Total raw matches: {len(matches)}")
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(reference_descriptors, des2)
+        matches = sorted(matches, key=lambda x: x.distance)
 
-    matches = sorted(matches, key=lambda x: x.distance)
+        distances = [m.distance for m in matches]
+        if not distances:
+            return jsonify({'match': False, 'reason': 'No matches found'})
 
-    distances = [m.distance for m in matches]
-    if len(distances) == 0:
-        return jsonify({'match': False, 'reason': 'No matches found'})
+        median_distance = np.median(distances)
+        threshold = median_distance * 1.2
+        good_matches = [m for m in matches if m.distance < threshold]
 
-    median_distance = np.median(distances)
-    dynamic_threshold = median_distance * 1.2
+        print(f"[MATCHING] Good matches: {len(good_matches)}, Median dist: {median_distance:.2f}, Threshold: {threshold:.2f}")
 
-    good_matches = [m for m in matches if m.distance < dynamic_threshold]
-    print(f"[MATCHING] Good matches: {len(good_matches)}, Median dist: {median_distance:.2f}, Threshold: {dynamic_threshold:.2f}")
+        if len(good_matches) < 25:
+            return jsonify({'match': False, 'reason': 'Not enough good matches', 'good_matches': len(good_matches)})
 
-    is_match = len(good_matches) >= 15
+        # Готуємо дані для пошуку гомографії
+        src_pts = np.float32([reference_keypoints[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-    return jsonify({
-        'match': is_match,
-        'good_matches': len(good_matches),
-        'total_matches': len(matches),
-        'threshold': dynamic_threshold,
-        'median_distance': median_distance
-    })
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        inliers = int(mask.sum()) if mask is not None else 0
 
+        print(f"[HOMOGRAPHY] Inliers: {inliers} / {len(good_matches)}")
+
+        is_match = inliers > 15  # Мінімум реальних геометричних збігів
+
+        return jsonify({
+            'match': is_match,
+            'good_matches': len(good_matches),
+            'total_matches': len(matches),
+            'inliers': inliers,
+            'threshold': threshold,
+            'median_distance': median_distance
+        })
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
